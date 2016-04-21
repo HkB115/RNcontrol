@@ -337,7 +337,6 @@ case "$1" in
     server_update
     ;;
   upgrade)
-    server_backup
     server_upgrade
     ;;
   backup)
