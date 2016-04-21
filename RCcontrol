@@ -1,0 +1,379 @@
+#!/bin/bash
+# /etc/init.d/RNcontrol
+# version 1.4 2016-04-15 (YYYY-MM-DD)
+
+### BEGIN INIT INFO
+# Provides:   RNcontrol
+# Required-Start: $local_fs $remote_fs
+# Required-Stop:  $local_fs $remote_fs
+# Should-Start:   $network
+# Should-Stop:    $network
+# Default-Start:  2 3 4 5
+# Default-Stop:   0 1 6
+# Short-Description:    Server autorun script
+# Description:    Allows control of a server
+### END INIT INFO
+
+## Settings
+SCREEN="screen"
+USERNAME="username"
+VERSION="1.7.10-1614" # Include ${VERSION} in the SERVICE name where the version number should go
+SERVICE="FTBServer-${VERSION}.jar" # Ensure this file is in the root directory of your server storage
+BACKUP_PATH='/home/username/server/backups'
+RUN_PATH='/home/username/ramdisk/server'
+STORAGE_PATH='/home/username/server/server-files'
+UPDATE_PATH='/home/username/server/updates'
+UPDATE_REPO=""
+CPU_COUNT=2
+MAXHEAP=2048
+MINHEAP=1024
+HISTORY=1024
+ARGUMENTS="-server -Xmx${MAXHEAP}M -Xms${MINHEAP}M -XX:+UseConcMarkSweepGC -XX:+CMSIncrementalPacing -XX:ParallelGCThreads=$CPU_COUNT -XX:+AggressiveOpts"
+OPTIONS='nogui'
+INVOCATION="java $ARGUMENTS -jar $SERVICE $OPTIONS"
+## End of settings
+
+TEXT_RESET="\e[0m"
+TEXT_BOLD="\e[1m"
+TEXT_RED="\e[31m"
+TEXT_GREEN="\e[32m"
+TEXT_YELLOW="\e[33m"
+
+as_user()
+  {
+  if [ "`whoami`" == "$USERNAME" ] ;
+  then
+    bash -c "$1"
+  else
+    su - $USERNAME -c "$1"
+  fi
+  }
+
+server_run_check()
+  {
+  if [ -d "$RUN_PATH" ]
+  then
+    return 1
+  else
+    return 0
+  fi
+  }
+
+server_status()
+  {
+  ps ax | grep -v grep | grep -v -i SCREEN | grep $SERVICE > /dev/null
+  return $?
+  }
+
+server_start()
+  {
+  printf "Starting $SERVICE ... "
+  if server_status
+  then
+    printf "ERROR\n - Failed to start $SERVICE as it was already running!\n"
+  else
+    as_user "mkdir $RUN_PATH"
+    cd $RUN_PATH
+    as_user "cp -R $STORAGE_PATH/* $RUN_PATH/"
+    ## Begin start commands
+
+    ## End start commands
+    as_user "cd $RUN_PATH && screen -h $HISTORY -dmS $SCREEN $INVOCATION"
+    sleep 10
+    if server_status
+    then
+      printf "Done\n - Use \'screen -x $SCREEN\' to view it.\n"
+    else
+      printf "ERROR\n - Failed to start $SERVICE!\n"
+    fi
+  fi
+  }
+
+server_save_off()
+  {
+  printf "Saving files and disabling saving... "
+  if server_status
+  then
+    ## Begin save_off commands
+    as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"save-off\"\015'"
+    as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"save-all\"\015'"
+    ## End save_off commands
+    sync
+    printf "Done\n"
+  else
+    printf "ERROR\n - $SERVICE is not running! Cannot suspend saving.\n"
+  fi
+  }
+
+server_save_on()
+  {
+  printf "Enabling saving... "
+  if server_status
+  then
+    ## Begin save_on commands
+    as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"save-on\"\015'"
+    ## End save_on commands
+    printf "Done\n"
+  else
+    printf "ERROR\n - $SERVICE is not running! Cannot enable saving.\n"
+  fi
+  }
+
+server_stop()
+  {
+  printf "Stopping $SERVICE ... "
+  if server_status
+  then
+    ## Begin stop countdown commands
+    for sec in {300..1}
+    do
+      if [ $sec -eq 300 ]
+      then
+        as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Server shutting down in 5 minutes.\"\015'"
+      elif [ $sec -eq 240 ]
+      then
+        as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Server shutting down in 4 minutes.\"\015'"
+      elif [ $sec -eq 180 ]
+      then
+        as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Server shutting down in 3 minutes.\"\015'"
+      elif [ $sec -eq 120 ]
+      then
+        as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Server shutting down in 2 minutes.\"\015'"
+      elif [ $sec -eq 60 ]
+      then
+        as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Server shutting down in 1 minutes. Saving server...\"\015'"
+        server_save_off
+        server_run_save
+      elif [ $sec -lt 10 ]
+      then
+        as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Server shutting down in $sec seconds.\"\015'"
+      fi
+      sleep 1
+      continue
+    done
+    ## End stop countdown commands
+    printf "Proceed\n"
+    server_stop_now
+  else
+    printf "ERROR\n - $SERVICE is not running!\n"
+  fi
+  }
+
+server_stop_now()
+  {
+  printf "Stopping $SERVICE NOW ... "
+  if server_status
+  then
+    ## Begin stop commands
+    as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"say Stopping server now. Bye bye.\"\015'"
+    as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"stop\"\015'"
+    ## End stop commands
+    printf "Stop command sent\n"
+    sleep 15
+  else
+    printf "ERROR\n - $SERVICE is not running!\n"
+  fi
+  printf "Checking status of $SERVICE ... "
+  if server_status
+  then
+    printf "Running\n"
+  else
+    printf "Stopped\n"
+  fi
+  }
+
+server_update()
+  {
+  printf "Checking for updates ... $SERVICE ... \n"
+  printf "Get $UPDATE_REPO\n"
+  as_user "cd $UPDATE_PATH && wget -q -O $UPDATE_PATH/$SERVICE.update $UPDATE_REPO"
+  printf "Reading package... "
+  if [ -f $UPDATE_PATH/$SERVICE.update ]
+  then
+    printf "Done\n"
+    if `diff $STORAGE_PATH/$SERVICE $UPDATE_PATH/$SERVICE.update > /dev/null`
+    then
+      printf " - You already have the latest version of $SERVICE installed\n"
+    else
+    	printf " - A new version of $SERVICE has been downloaded. Run upgrade to install it\n"
+    fi
+  else
+    printf "ERROR\n - Could not fetch update package at requested URL\n"
+  fi
+  }
+
+server_upgrade()
+  {
+  server_backup
+  printf "Preparing to upgrade ... $SERVICE ... \n"
+  printf "Checking versions... "
+  if [ -f $UPDATE_PATH/$SERVICE.update ]
+  then
+    if `diff $STORAGE_PATH/$SERVICE $UPDATE_PATH/$SERVICE.update > /dev/null`
+    then
+      printf "Abort\n - You already have the latest version of $SERVICE installed\n"
+    else
+    	if server_status
+      then
+        printf "Abort\n - $SERVICE is running! Please stop it first\n"
+      else
+        as_user "cp -Ru $UPDATE_PATH/$SERVICE.update $STORAGE_PATH/$SERVICE"
+        printf "Done\n - $SERVICE successfully updated\n"
+      fi
+    fi
+  else
+    printf "Abort\n - No update package found! Please run the update command\n"
+  fi
+  }
+
+server_backup()
+  {
+  printf "Running server backup... "
+  if [ -f $BACKUP_PATH/backup_`date "+%Y.%m.%d"`.tar.gz ]
+  then
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+    do
+      if [ -f $BACKUP_PATH/backup_`date "+%Y.%m.%d"`-$i.tar.gz ]
+      then
+        continue
+      else
+        as_user "cd $STORAGE_PATH/ && tar zcf $BACKUP_PATH/backup_`date "+%Y.%m.%d"`-$i.tar.gz $STORAGE_PATH/"
+        break
+      fi
+    done
+  else
+    as_user "cd $STORAGE_PATH/ && tar zcf $BACKUP_PATH/backup_`date "+%Y.%m.%d"`.tar.gz $STORAGE_PATH/"
+  fi
+  printf "Done\n"
+  }
+
+server_run_clear()
+  {
+  printf "Clearing server run directory... "
+  if server_status
+  then
+    printf "Abort\n - $SERVICE is running! Please stop it before clearing the run directory\n"
+  else
+    if [ -d "$RUN_PATH" ]
+    then
+      as_user "rm -r $RUN_PATH/"
+    fi
+    printf "Done\n"
+  fi 
+  }
+
+server_run_save()
+  {
+  printf "Saving server run files to storage... "
+  if server_status
+  then
+    if [ -f $RUN_PATH/$SERVICE ]
+    then
+      if [ -d $BACKUP_PATH/tmp ]
+      then
+        as_user "rm -r $BACKUP_PATH/tmp/"
+      fi
+      if [ -d $STORAGE_PATH ]
+      then
+        as_user "cp -R $STORAGE_PATH/ $BACKUP_PATH/tmp/"
+        as_user "rm -r $STORAGE_PATH/*"
+      fi
+      as_user "cp -R $RUN_PATH/* $STORAGE_PATH/"
+      if [ -d $BACKUP_PATH/tmp ]
+      then
+        as_user "rm -r $BACKUP_PATH/tmp/"
+      fi
+      printf "Done\n"
+    else
+      printf "ERROR\n - Server files not in run directory\n"
+    fi
+  else
+    printf "ERROR\n - $SERVICE is not running\n"
+  fi
+  }
+
+server_command()
+  {
+  command="$1";
+  if pgrep -u $USERNAME -f $SERVICE > /dev/null
+  then
+    pre_log_len=`wc -l "$RUN_PATH/commands.log" | awk '{print $1}'`
+    printf "$SERVICE is running... executing command\n"
+    as_user "screen -p 0 -S $SCREEN -X eval 'stuff \"$command\"\015'"
+    # Assumes that the command will run
+    sleep .1 # assumes that the command will run and print to the log file in less than .1 seconds
+    # print output
+    tail -n $[`wc -l "$RUN_PATH/commands.log" | awk '{print $1}'`-$pre_log_len] "$RUN_PATH/commands.log"
+  fi
+  }
+
+case "$1" in
+  start)
+    server_run_clear
+    server_start
+    server_save_on
+    ;;
+  stop)
+    server_save_off
+    server_run_save
+    server_stop
+    server_run_clear
+    ;;
+  force-stop)
+    server_save_off
+    server_run_save
+    server_stop_now
+    server_run_clear
+    ;;
+  restart)
+    server_save_off
+    server_run_save
+    server_stop
+    server_run_clear
+    server_start
+    server_save_on
+    ;;
+  update)
+    server_update
+    ;;
+  upgrade)
+    server_backup
+    server_upgrade
+    ;;
+  backup)
+    server_save_off
+    server_run_save
+    server_backup
+    server_save_on
+    ;;
+  run-clear)
+    server_run_clear
+    ;;
+  run-save)
+    server_save_off
+    server_run_save
+    server_save_on
+    ;;
+  status)
+    if server_status
+    then
+      echo "$SERVICE is running."
+    else
+      echo "$SERVICE is not running."
+    fi
+    ;;
+  command)
+    if [ $# -gt 1 ]; then
+      shift
+      server_command "$*"
+    else
+      echo "Must specify server command (try 'help'?)"
+    fi
+    ;;
+  *)
+  echo "Usage: /etc/init.d/RNcontrol {start|stop|force-stop|update|upgrade|backup|status|restart|run-save|command}"
+  exit 1
+  ;;
+esac
+
+exit 0
